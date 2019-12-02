@@ -1,3 +1,4 @@
+const jsonfile = require("jsonfile");
 const { retry, flatmapP } = require("dashp");
 const { toArray } = require("lodash");
 const { envelope: env } = require("@sugarcube/core");
@@ -5,8 +6,17 @@ const { runCmd } = require("@sugarcube/utils");
 
 const querySource = "twitter_tweet";
 
-const twitterScraper = user =>
-  retry(() => runCmd("twitterscraper", ["--user", user, "--dump"]));
+async function twitterScraper(user) {
+  runCmd("twitterscraper", [
+    "--user",
+    user,
+    "--output",
+    "tweets.json",
+    "--overwrite"
+  ]);
+  const file = await jsonfile.readFile("./tweets.json");
+  return file;
+}
 
 const plugin = async (envelope, { stats, log }) => {
   const queries = env.queriesByType(querySource, envelope);
@@ -21,11 +31,14 @@ const plugin = async (envelope, { stats, log }) => {
       stats.fail({ term: query, reason: e.message });
       return [];
     }
-    const bb = JSON.parse(profile);
-    log.info(bb.length);
+
     stats.count("success");
 
-    return "hi";
+    return profile.map(tweet => {
+      return {
+        _sc_id_fields: tweet["tweet_id"]
+      };
+    });
   }, queries);
 
   // log.info(`We have scraped ${queries.length} twitter profiles!`);
