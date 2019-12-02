@@ -1,0 +1,20 @@
+{
+  "name": "sugarcube-plugin-twitterscraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Tareef Mando <tareef@fastmail.com>",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "@sugarcube/cli": "^0.34.0",
+    "@sugarcube/plugin-tap": "^0.34.0"
+  },
+  "dependencies": {
+    "@sugarcube/utils": "^0.34.0",
+    "lodash": "^4.17.15"
+  }
+}
