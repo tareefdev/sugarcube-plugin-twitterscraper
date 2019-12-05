@@ -1,45 +1,47 @@
 const os = require("os");
 const fs = require("fs");
+const { URL } = require("url");
 const { retry, flatmapP } = require("dashp");
 const { envelope: env } = require("@sugarcube/core");
 const { runCmd } = require("@sugarcube/utils");
 const { promisify } = require("util");
-const {cleanUp} = require(@sugarcube/plugin-fs);
+const { cleanUp, existsP } = require("@sugarcube/plugin-fs");
+const csv = require("csvtojson");
+const { parse } = require("date-fns");
 const readFile = promisify(fs.readFile);
 
-const querySource = "twitter_user";
-const tempDir = os.tmpdir();
+const querySource = "twitter_tweet";
+
+function parseTweetId(id) {
+  if (id.startsWith("http")) {
+    const u = new URL(id);
+    return u.pathname.split("/").filter(x => x !== "")[2];
+  }
+  return id;
+}
 
 async function twitterScraper(user) {
-  const file = `${tempDir}/tweets-${user}.json`;
-  let ifFileExist;
+  const tempDir = os.tmpdir();
+  const csvFile = `${tempDir}/tweets-${user}.csv`;
+  let data = [];
 
-  await runCmd("twitterscraper", [
-    "--user",
-    user,
-    "-a",
-    "--output",
-    file,
-    "--overwrite"
-  ]);
-  fs.access(file, fs.F_OK, err => {
-    ifFileExist = err ? true : false;
-  });
-  const data = ifFileExist ? JSON.parse((await readFile(file)).toString()) : [];
-  ifFileExist && await cleanUp(file);
+  await runCmd("twint", ["-u", user, "-o", csvFile, "--csv"]);
+  if (await existsP(csvFile)) {
+    data = await csv().fromFile(csvFile);
+    await cleanUp(csvFile);
+  }
   return data;
 }
 
 const plugin = async (envelope, { stats, log }) => {
-  const queries = env.queriesByType(querySource, envelope);
+  const queries = env
+    .queriesByType(querySource, envelope)
+    .map(term => parseTweetId(term));
 
-  // !! you need parsing of the input query. I'm sure you get most feeds as
-  // full URL's. Take a look here:
-  // https://github.com/critocrito/sugarcube/blob/master/packages/plugin-fs/lib/api.js#L39
   const data = await flatmapP(async query => {
     stats.count("total");
     let tweets;
-
+    log.info(query);
     try {
       tweets = await twitterScraper(query);
     } catch (e) {
@@ -51,16 +53,46 @@ const plugin = async (envelope, { stats, log }) => {
     stats.count("success");
 
     log.info(`We have scraped ${tweets.length} tweets for ${query}.`);
-
-    return tweets.map(({tweet_id,text,timestamp,has_media, tweet_url }) => {
-      return {
-        _sc_id_fields: [tweet_id],
-        text,
-        timestamp,
-        has_media,
-        tweet_url
-      };
-    });
+    return tweets.map(
+      ({
+        id,
+        date,
+        time,
+        username,
+        name,
+        tweet,
+        urls,
+        photos,
+        hashtags,
+        link,
+        video,
+        geo,
+        place
+      }) => {
+        const timestamp = parse(
+          `${date}:${time}`,
+          "yyyy-MM-dd:H:mm:ss:SS",
+          new Date()
+        );
+        return {
+          _sc_id_fields: [id],
+          _sc_content_fields: [tweet],
+          _sc_media: [...photos],
+          timestamp,
+          time,
+          username,
+          name,
+          tweet,
+          urls,
+          photos,
+          hashtags,
+          link,
+          video,
+          geo,
+          place
+        };
+      }
+    );
   }, queries);
 
   return env.concatData(data, envelope);
