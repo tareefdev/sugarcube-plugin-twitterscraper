@@ -7,10 +7,29 @@ const { runCmd } = require("@sugarcube/utils");
 const { promisify } = require("util");
 const { cleanUp, existsP } = require("@sugarcube/plugin-fs");
 const csv = require("csvtojson");
-const { parse } = require("date-fns");
+const { parse, format, endOfDay, eachWeekOfInterval } = require("date-fns");
 const readFile = promisify(fs.readFile);
 
 const querySource = "twitter_tweet";
+
+const formatDate = date => format(date, "yyyy-MM-dd ");
+const parseDate = date => parse(date, "yyyy-MM-dd mm:ss:SS");
+
+const endDay = endOfDay(new Date());
+const startDay = parse("2011-01-01", "yyyy-MM-dd", new Date());
+const intervals = eachWeekOfInterval({ start: startDay, end: endDay });
+
+async function scrapByInterval(query) {
+  await Promise.all(
+    intervals.map(async (date, index) => {
+      await twitterScraper(
+        query,
+        parseDate(date),
+        parseDate(intervals[index + 1])
+      );
+    })
+  );
+}
 
 function parseTweetId(id) {
   if (id.startsWith("http")) {
@@ -20,12 +39,23 @@ function parseTweetId(id) {
   return id;
 }
 
-async function twitterScraper(user) {
+async function twitterScraper(user, sinceDay, untilDay) {
   const tempDir = os.tmpdir();
   const csvFile = `${tempDir}/tweets-${user}.csv`;
   let data = [];
 
-  await runCmd("twint", ["-u", user, "-o", csvFile, "--csv"]);
+  await runCmd("twint", [
+    "-u",
+    user,
+    "--since",
+    sinceDay,
+    "--until",
+    untilDay,
+    "-o",
+    csvFile,
+    "--csv"
+  ]);
+
   if (await existsP(csvFile)) {
     data = await csv().fromFile(csvFile);
     await cleanUp(csvFile);
@@ -41,9 +71,8 @@ const plugin = async (envelope, { stats, log }) => {
   const data = await flatmapP(async query => {
     stats.count("total");
     let tweets;
-    log.info(query);
     try {
-      tweets = await twitterScraper(query);
+      tweets = await scrapByInterval(query);
     } catch (e) {
       log.error(`Failed to scrape ${query}: ${e.message}`);
       stats.fail({ term: query, reason: e.message });
