@@ -1,10 +1,10 @@
 [
   {
-    "type": "twitter_tweet",
+    "type": "twitter_user",
     "term": "syrian_archive"
   },
   {
-    "type": "twitter_tweet",
+    "type": "twitter_user",
     "term": "YemeniArchive"
   }
 ]

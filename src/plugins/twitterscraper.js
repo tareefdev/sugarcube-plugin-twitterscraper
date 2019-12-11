@@ -1,56 +1,53 @@
 const os = require("os");
 const fs = require("fs");
 const { URL } = require("url");
-const { retry, flatmapP } = require("dashp");
+const { retry, flatmapP, flatmapP4 } = require("dashp");
 const { envelope: env } = require("@sugarcube/core");
 const { runCmd } = require("@sugarcube/utils");
 const { promisify } = require("util");
 const { cleanUp, existsP } = require("@sugarcube/plugin-fs");
 const csv = require("csvtojson");
-const { parse, format, endOfDay, eachWeekOfInterval } = require("date-fns");
+
+const {
+  parse,
+  format,
+  endOfDay,
+  addWeeks,
+  eachWeekOfInterval
+} = require("date-fns");
 const readFile = promisify(fs.readFile);
 
-const querySource = "twitter_tweet";
+const querySource = "twitter_user";
 
-const formatDate = date => format(date, "yyyy-MM-dd ");
-const parseDate = date => parse(date, "yyyy-MM-dd mm:ss:SS");
+const formatDate = date => format(date, "yyyy-MM-dd HH:mm:ss");
+const parseDate = date => parse(date, "yyyy-MM-dd mm:ss:SS", new Date());
 
-const endDay = endOfDay(new Date());
-const startDay = parse("2011-01-01", "yyyy-MM-dd", new Date());
-const intervals = eachWeekOfInterval({ start: startDay, end: endDay });
-
-async function scrapByInterval(query) {
-  await Promise.all(
-    intervals.map(async (date, index) => {
-      await twitterScraper(
-        query,
-        parseDate(date),
-        parseDate(intervals[index + 1])
-      );
-    })
-  );
-}
-
-function parseTweetId(id) {
-  if (id.startsWith("http")) {
-    const u = new URL(id);
-    return u.pathname.split("/").filter(x => x !== "")[2];
+const parseTwitterUser = user => {
+  if (Number.isInteger(user)) return user.toString();
+  if (user.startsWith("http")) {
+    const u = new URL(user);
+    return u.pathname
+      .replace(/^\//, "")
+      .replace(/\/$/, "")
+      .split("/")[0];
   }
-  return id;
-}
+  return user.replace(/^@/, "");
+};
 
 async function twitterScraper(user, sinceDay, untilDay) {
+  const since = formatDate(sinceDay);
+  const until = formatDate(untilDay);
   const tempDir = os.tmpdir();
-  const csvFile = `${tempDir}/tweets-${user}.csv`;
+  const csvFile = `${tempDir}/tweets-${user}-${since}-${until}.csv`;
   let data = [];
 
   await runCmd("twint", [
     "-u",
     user,
     "--since",
-    sinceDay,
+    since,
     "--until",
-    untilDay,
+    until,
     "-o",
     csvFile,
     "--csv"
@@ -64,15 +61,34 @@ async function twitterScraper(user, sinceDay, untilDay) {
 }
 
 const plugin = async (envelope, { stats, log }) => {
-  const queries = env
-    .queriesByType(querySource, envelope)
-    .map(term => parseTweetId(term));
+  const queries = env.queriesByType(querySource, envelope);
+
+  const endDay = endOfDay(new Date());
+  const startDay = parse("2011-01-01", "yyyy-MM-dd", new Date());
+  const intervals = eachWeekOfInterval({ start: startDay, end: endDay }).map(
+    week => [week, addWeeks(week, 1)]
+  );
 
   const data = await flatmapP(async query => {
     stats.count("total");
     let tweets;
     try {
-      tweets = await scrapByInterval(query);
+      tweets = await flatmapP4(async ([since, until]) => {
+        const data = await twitterScraper(
+          parseTwitterUser(query),
+          since,
+          until
+        );
+
+        log.debug(
+          `Fetched ${data.length} tweets from ${format(
+            since,
+            "yyyy-MM-dd"
+          )} until ${format(until, "yyyy-MM-dd")}`
+        );
+
+        return data;
+      }, intervals);
     } catch (e) {
       log.error(`Failed to scrape ${query}: ${e.message}`);
       stats.fail({ term: query, reason: e.message });
@@ -82,6 +98,7 @@ const plugin = async (envelope, { stats, log }) => {
     stats.count("success");
 
     log.info(`We have scraped ${tweets.length} tweets for ${query}.`);
+
     return tweets.map(
       ({
         id,
